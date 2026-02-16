@@ -1,0 +1,11 @@
+steps:
+  - name: 'golang:1.26' # Goのバージョンを1.21に合わせる
+    entrypoint: 'go'
+    args: ['build', '-o', 'app', './cmd/autoscaler'] # ビルド対象を現在のプロジェクトのメインパッケージに修正
+    env: []
+  - name: 'gcr.io/kaniko-project/executor:v1.9.1'
+    args:
+      - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscale/spanner-autoscaler:$BRANCH_NAME # リポジトリ名をautoscale/spanner-autoscalerに修正
+      - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscale/spanner-autoscaler:$COMMIT_SHA # リポジトリ名をautoscale/spanner-autoscalerに修正
+      - --cache=true
+      - --cache-ttl=6h
