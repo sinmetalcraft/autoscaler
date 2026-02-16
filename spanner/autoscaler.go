@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	instanceadmin "cloud.google.com/go/spanner/admin/instance/apiv1"         // Spanner Instance Admin API client
@@ -20,8 +21,12 @@ import (
 )
 
 var (
-	// lastResized は最後にリサイズした時間です
-	lastResized time.Time
+	// lastResizedStore はインスタンスごとの最終リサイズ時刻を保持します。
+	// このストアは複数のリクエストから同時にアクセスされるため、Mutexで保護します。
+	lastResizedStore = struct {
+		sync.Mutex
+		m map[string]time.Time
+	}{m: make(map[string]time.Time)}
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -120,13 +125,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Failed to update processing units.", http.StatusInternalServerError)
 				return
 			}
-			lastResized = time.Now()
+			lastResizedStore.Lock()
+			lastResizedStore.m[instanceName] = time.Now()
+			lastResizedStore.Unlock()
 			fmt.Fprintf(w, "Scaled up to %d PUs.", newPU)
 		} else {
 			fmt.Fprintf(w, "CPU usage is high, but already at max PUs.")
 		}
 	} else if cpuUsage < scaleDownThreshold {
-		if time.Since(lastResized) < interval {
+		lastResizedStore.Lock()
+		lastResized, ok := lastResizedStore.m[instanceName]
+		lastResizedStore.Unlock()
+		if ok && time.Since(lastResized) < interval {
 			log.Printf("Skipping scale down due to interval.")
 			fmt.Fprintf(w, "Skipping scale down due to interval.")
 			return
@@ -143,7 +153,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Failed to update processing units.", http.StatusInternalServerError)
 				return
 			}
-			lastResized = time.Now()
+			lastResizedStore.Lock()
+			lastResizedStore.m[instanceName] = time.Now()
+			lastResizedStore.Unlock()
 			fmt.Fprintf(w, "Scaled down to %d PUs.", newPU)
 		} else {
 			fmt.Fprintf(w, "CPU usage is low, but already at min PUs.")
