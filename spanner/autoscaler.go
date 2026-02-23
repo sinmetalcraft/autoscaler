@@ -2,6 +2,7 @@ package spanner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -29,59 +30,41 @@ var (
 	}{m: make(map[string]time.Time)}
 )
 
+// AutoscalerConfig is the configuration for the autoscaler.
+type AutoscalerConfig struct {
+	Project            string  `json:"project"`
+	Instance           string  `json:"instance"`
+	PUStep             int     `json:"puStep"`
+	PUMin              int     `json:"puMin"`
+	PUMax              int     `json:"puMax"`
+	ScaleUpThreshold   float64 `json:"scaleUpThreshold"`
+	ScaleDownThreshold float64 `json:"scaleDownThreshold"`
+}
+
 func Handler(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	instance := r.URL.Query().Get("instance")
-	puStepStr := r.URL.Query().Get("pu_step")
-	puMinStr := r.URL.Query().Get("pu_min")
-	puMaxStr := r.URL.Query().Get("pu_max")
-	scaleUpThresholdStr := r.URL.Query().Get("scale_up_threshold")
-	scaleDownThresholdStr := r.URL.Query().Get("scale_down_threshold")
-
-	if project == "" || instance == "" || puStepStr == "" || puMinStr == "" || puMaxStr == "" {
-		http.Error(w, "Missing required query parameters.", http.StatusBadRequest)
+	var config AutoscalerConfig
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		http.Error(w, "Invalid JSON request body.", http.StatusBadRequest)
 		return
 	}
 
-	puStep, err := strconv.Atoi(puStepStr)
-	if err != nil {
-		http.Error(w, "Invalid pu_step.", http.StatusBadRequest)
-		return
-	}
-	puMin, err := strconv.Atoi(puMinStr)
-	if err != nil {
-		http.Error(w, "Invalid pu_min.", http.StatusBadRequest)
-		return
-	}
-	puMax, err := strconv.Atoi(puMaxStr)
-	if err != nil {
-		http.Error(w, "Invalid pu_max.", http.StatusBadRequest)
+	if config.Project == "" || config.Instance == "" || config.PUStep == 0 || config.PUMin == 0 || config.PUMax == 0 {
+		http.Error(w, "Missing required fields in JSON.", http.StatusBadRequest)
 		return
 	}
 
-	scaleUpThreshold := 50.0
-	if scaleUpThresholdStr != "" {
-		scaleUpThreshold, err = strconv.ParseFloat(scaleUpThresholdStr, 64)
-		if err != nil {
-			http.Error(w, "Invalid scale_up_threshold.", http.StatusBadRequest)
-			return
-		}
+	if config.ScaleUpThreshold == 0 {
+		config.ScaleUpThreshold = 50.0
 	}
-
-	scaleDownThreshold := 30.0
-	if scaleDownThresholdStr != "" {
-		scaleDownThreshold, err = strconv.ParseFloat(scaleDownThresholdStr, 64)
-		if err != nil {
-			http.Error(w, "Invalid scale_down_threshold.", http.StatusBadRequest)
-			return
-		}
+	if config.ScaleDownThreshold == 0 {
+		config.ScaleDownThreshold = 30.0
 	}
 
 	log.Printf("Request received: project=%s, instance=%s, pu_step=%d, pu_min=%d, pu_max=%d, scale_up_threshold=%.2f, scale_down_threshold=%.2f",
-		project, instance, puStep, puMin, puMax, scaleUpThreshold, scaleDownThreshold)
+		config.Project, config.Instance, config.PUStep, config.PUMin, config.PUMax, config.ScaleUpThreshold, config.ScaleDownThreshold)
 
 	ctx := context.Background()
-	instanceName := fmt.Sprintf("projects/%s/instances/%s", project, instance)
+	instanceName := fmt.Sprintf("projects/%s/instances/%s", config.Project, config.Instance)
 
 	// Spannerの現在のProcessing Unitを取得
 	currentPU, err := getCurrentProcessingUnits(ctx, instanceName)
@@ -93,7 +76,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Current Processing Units: %d", currentPU)
 
 	// SpannerのCPU使用率を取得
-	cpuUsage, err := getSpannerCPUUsage(ctx, project, instance)
+	cpuUsage, err := getSpannerCPUUsage(ctx, config.Project, config.Instance)
 	if err != nil {
 		log.Printf("Failed to get Spanner CPU usage: %v", err)
 		http.Error(w, "Failed to get Spanner CPU usage.", http.StatusInternalServerError)
@@ -113,10 +96,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	interval := time.Duration(intervalMinutes) * time.Minute
 
 	// スケーリングロジック
-	if cpuUsage > scaleUpThreshold {
-		newPU := currentPU + int32(puStep)
-		if newPU > int32(puMax) {
-			newPU = int32(puMax)
+	if cpuUsage > config.ScaleUpThreshold {
+		newPU := currentPU + int32(config.PUStep)
+		if newPU > int32(config.PUMax) {
+			newPU = int32(config.PUMax)
 		}
 		if newPU != currentPU {
 			log.Printf("Scaling up to %d PUs", newPU)
@@ -132,7 +115,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			fmt.Fprintf(w, "CPU usage is high, but already at max PUs.")
 		}
-	} else if cpuUsage < scaleDownThreshold {
+	} else if cpuUsage < config.ScaleDownThreshold {
 		lastResizedStore.Lock()
 		lastResized, ok := lastResizedStore.m[instanceName]
 		lastResizedStore.Unlock()
@@ -142,9 +125,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		newPU := currentPU - int32(puStep)
-		if newPU < int32(puMin) {
-			newPU = int32(puMin)
+		newPU := currentPU - int32(config.PUStep)
+		if newPU < int32(config.PUMin) {
+			newPU = int32(config.PUMin)
 		}
 		if newPU != currentPU {
 			log.Printf("Scaling down to %d PUs", newPU)
