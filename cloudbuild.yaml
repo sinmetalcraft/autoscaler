@@ -3,7 +3,7 @@ steps:
     entrypoint: 'go'
     args: ['build', '-o', 'app', './cmd/autoscaler']
     env: [ 'CGO_ENABLED=0' ]
-  - name: 'gcr.io/kaniko-project/executor:v1.9.1'
+  - name: 'gcr.io/kaniko-project/executor:v1.24.0'
     args:
       - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscaler/main:$BRANCH_NAME
       - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscaler/main:$COMMIT_SHA
