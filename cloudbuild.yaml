@@ -1,9 +1,9 @@
 steps:
-  - name: 'golang:1.26' # Goのバージョンを1.21に合わせる
+  - name: 'golang:1.26'
     entrypoint: 'go'
     args: ['build', '-o', 'app', './cmd/autoscaler']
-    env: []
-  - name: 'gcr.io/kaniko-project/executor:v1.9.1'
+    env: [ 'CGO_ENABLED=0' ]
+  - name: 'gcr.io/kaniko-project/executor:v1.24.0'
     args:
       - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscaler/main:$BRANCH_NAME
       - --destination=asia-northeast1-docker.pkg.dev/$PROJECT_ID/autoscaler/main:$COMMIT_SHA
