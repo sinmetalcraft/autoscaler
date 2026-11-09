@@ -1,3 +1,3 @@
-FROM gcr.io/distroless/static-debian11
+FROM gcr.io/distroless/static-debian13
 COPY ./app /app
 ENTRYPOINT ["/app"]
